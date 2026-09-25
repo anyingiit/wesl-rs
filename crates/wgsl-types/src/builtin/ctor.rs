@@ -28,6 +28,12 @@ use crate::{
 
 type E = Error;
 
+/// Error for `matCxR()`: WGSL has no zero-value matrix constructor without a template,
+/// because the component type cannot be inferred from zero arguments.
+const ERR_MAT_ZERO_VALUE: E = E::Builtin(
+    "the zero-value matrix constructor requires a template argument (e.g. `mat2x2<f32>()`)",
+);
+
 /// Check if a function name could correspond to a built-in constructor function.
 ///
 /// Warning: WGSL allows shadowing built-in functions. Check that a user-defined
@@ -406,6 +412,9 @@ pub fn mat(c: usize, r: usize, args: &[Instance]) -> Result<Instance, E> {
         // note: `matCxR(e: matCxR<S>) -> matCxR<S>` is no-op
         Ok(m.clone().into())
     } else {
+        if args.is_empty() {
+            return Err(ERR_MAT_ZERO_VALUE);
+        }
         let tys = args.iter().map(|a| a.ty()).collect_vec();
         let ty = convert_all_ty(&tys).ok_or(E::Builtin("matrix components are incompatible"))?;
         let mut inner_ty = ty.inner_ty();
@@ -723,6 +732,9 @@ fn mat_ctor_ty(c: u8, r: u8, args: &[Type]) -> Result<Type, E> {
         }
         Ok(ty.clone())
     } else {
+        if args.is_empty() {
+            return Err(ERR_MAT_ZERO_VALUE);
+        }
         let ty = convert_all_ty(args).ok_or(E::Builtin("matrix components are incompatible"))?;
         let mut inner_ty = ty.inner_ty();
 
@@ -1091,5 +1103,33 @@ impl AtomicInstance {
     pub fn storable_zero_value(ty: &Type) -> Result<Self, E> {
         let zero = Instance::zero_value(ty)?;
         Ok(AtomicInstance::new(zero))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPECTED_MSG: &str = "the zero-value matrix constructor requires a template \
+        argument (e.g. `mat2x2<f32>()`)";
+
+    #[test]
+    fn mat_zero_value_without_template_has_explicit_error() {
+        for (c, r) in [(2, 2), (3, 4), (4, 2)] {
+            let name = format!("mat{c}x{r}");
+
+            let err = type_ctor(&name, None, &[]).unwrap_err();
+            assert_eq!(err.to_string(), EXPECTED_MSG, "type_ctor `{name}()`");
+
+            let err = mat(c, r, &[]).unwrap_err();
+            assert_eq!(err.to_string(), EXPECTED_MSG, "mat `{name}()`");
+        }
+    }
+
+    #[test]
+    fn mat_zero_value_with_template() {
+        let tplt = [TpltParam::Type(Type::F32)];
+        let ty = type_ctor("mat2x2", Some(&tplt), &[]).unwrap();
+        assert_eq!(ty, Type::Mat(2, 2, Box::new(Type::F32)));
     }
 }
